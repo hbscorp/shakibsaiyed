@@ -6,7 +6,7 @@ A simple Flask application that interacts with Minio S3 storage
 import os
 import json
 from datetime import datetime
-from flask import Flask, jsonify, request
+from flask import Flask, current_app, jsonify, request
 import boto3
 from botocore.exceptions import ClientError
 
@@ -19,11 +19,8 @@ MINIO_SECRET_KEY = os.getenv('MINIO_SECRET_KEY', 'minioadmin')
 BUCKET_NAME = os.getenv('BUCKET_NAME', 'analytics-data')
 
 
-def get_s3_client():
-    """
-    Create and return an S3 client for Minio
-    NOTE: This is intentionally inefficient - creating a new client on each call
-    """
+def init_s3_client():
+    """Initialize a S3 client for Minio"""
     return boto3.client(
         's3',
         endpoint_url=f'http://{MINIO_ENDPOINT}',
@@ -31,6 +28,16 @@ def get_s3_client():
         aws_secret_access_key=MINIO_SECRET_KEY,
         region_name='us-east-1'
     )
+
+
+def get_s3_client():
+    """Return or initialize S3 client for Minio"""
+    if 'S3_CLIENT' not in current_app.config:
+        current_app.config['S3_CLIENT'] = None
+
+    if current_app.config['S3_CLIENT'] is None:
+        current_app.config['S3_CLIENT'] = init_s3_client()
+    return current_app.config['S3_CLIENT']
 
 
 def ensure_bucket_exists():
@@ -41,6 +48,18 @@ def ensure_bucket_exists():
     except ClientError:
         s3_client.create_bucket(Bucket=BUCKET_NAME)
         print(f"Created bucket: {BUCKET_NAME}")
+
+
+# Initialize bucket before first request
+@app.before_request
+def initialize_storage():
+    """Initialize storage on first request"""
+    if not hasattr(app, '_bucket_initialized'):
+        try:
+            ensure_bucket_exists()
+            app._bucket_initialized = True
+        except Exception as e:
+            print(f"Warning: Could not ensure bucket exists: {e}")
 
 
 @app.route('/health', methods=['GET'])
@@ -77,14 +96,14 @@ def upload_data():
     """Upload data to S3 storage"""
     try:
         data = request.get_json()
-        
+
         if not data:
             return jsonify({'error': 'No data provided'}), 400
-        
+
         # Generate a unique filename
         timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
         filename = f'data_{timestamp}.json'
-        
+
         # Upload to S3
         s3_client = get_s3_client()
         s3_client.put_object(
@@ -93,13 +112,13 @@ def upload_data():
             Body=json.dumps(data),
             ContentType='application/json'
         )
-        
+
         return jsonify({
             'message': 'Data uploaded successfully',
             'filename': filename,
             'bucket': BUCKET_NAME
         }), 201
-        
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -110,7 +129,7 @@ def list_data():
     try:
         s3_client = get_s3_client()
         response = s3_client.list_objects_v2(Bucket=BUCKET_NAME)
-        
+
         files = []
         if 'Contents' in response:
             for obj in response['Contents']:
@@ -119,13 +138,13 @@ def list_data():
                     'size': obj['Size'],
                     'last_modified': obj['LastModified'].isoformat()
                 })
-        
+
         return jsonify({
             'bucket': BUCKET_NAME,
             'count': len(files),
             'files': files
         }), 200
-        
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -137,12 +156,12 @@ def get_data(filename):
         s3_client = get_s3_client()
         response = s3_client.get_object(Bucket=BUCKET_NAME, Key=filename)
         data = json.loads(response['Body'].read().decode('utf-8'))
-        
+
         return jsonify({
             'filename': filename,
             'data': data
         }), 200
-        
+
     except ClientError as e:
         if e.response['Error']['Code'] == 'NoSuchKey':
             return jsonify({'error': 'File not found'}), 404
@@ -157,12 +176,12 @@ def delete_data(filename):
     try:
         s3_client = get_s3_client()
         s3_client.delete_object(Bucket=BUCKET_NAME, Key=filename)
-        
+
         return jsonify({
             'message': 'File deleted successfully',
             'filename': filename
         }), 200
-        
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -190,6 +209,6 @@ if __name__ == '__main__':
         ensure_bucket_exists()
     except Exception as e:
         print(f"Warning: Could not ensure bucket exists: {e}")
-    
+
     # Run the application
     app.run(host='0.0.0.0', port=5000, debug=False)

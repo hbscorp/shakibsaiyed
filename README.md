@@ -50,6 +50,19 @@ The `resources/` directory contains a simple Python Flask application (`app.py`)
 
 **Challenge Element**: When you examine the application code, you'll notice it has a deliberate inefficiency in how it handles S3 connections. Identify this issue in your submission comments and implement a fix either in the application code or through environment configuration.
 
+#### Building and running the Python application container
+
+
+- Build
+```bash
+$  docker build -f Dockerfile -t flask_app .
+```
+
+- Run
+```bash
+$  docker run -d flask_app
+```
+
 ### Task 2: Orchestrate the Services
 
 Create a bash script `bin/deploy-app.sh` in the root of the repository to define and run the application stack.
